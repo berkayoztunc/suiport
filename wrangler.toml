@@ -1,0 +1,9 @@
+name = "suiport"
+main = "src/index.ts"
+compatibility_date = "2023-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "suiport-db"
+database_id = "your-database-id-here"
+

@@ -13,7 +13,18 @@
 	},
 	"observability": {
 		"enabled": true
-	}
+	},
+	"triggers": {
+		"crons": ["* * * * *"]  // Her dakika çalışacak
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "suiport-db",
+			"database_id": "b0c05760-191f-448b-8843-3233bdaa7fd9",
+			"remote": true
+		}
+	]
 	/**
 	 * Smart Placement
 	 * Docs: https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
