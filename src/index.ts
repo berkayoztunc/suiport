@@ -1,30 +1,68 @@
+/**
+ * Main application file for the SUI Portfolio tracking service
+ * This service provides APIs for tracking SUI wallet balances, token prices,
+ * and historical data for the SUI ecosystem
+ */
+
 import { Hono } from "hono";
+import { cors } from 'hono/cors'
 import { SuiClient, getFullnodeUrl } from '@mysten/sui/client';
 import { PriceService } from './services/price.service';
 import { DatabaseService } from './services/database.service';
 import { CronService } from './services/cron.service';
 import { getTokenPrice, getTokenPrices, getSuiPrice } from "@7kprotocol/sdk-ts";
 
-// Update bindings to include D1
+/**
+ * Interface for Cloudflare D1 database bindings
+ * Extends CloudflareBindings to include our D1 database instance
+ */
 interface Bindings extends CloudflareBindings {
   DB: D1Database;
 }
 
 const app = new Hono<{ Bindings: Bindings }>();
 
-// Export the fetch handler for HTTP requests
-export default app;
+/**
+ * Configure CORS middleware to allow cross-origin requests
+ * This enables the API to be called from any domain
+ */
+app.use('*', cors({
+  origin: '*', // Allow all origins
+  allowMethods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowHeaders: ['Content-Type', 'Authorization'],
+  exposeHeaders: ['Content-Length', 'X-Kuma-Revision'],
+  maxAge: 600,
+  credentials: true,
+}))
 
-// Export the scheduled function for cron jobs
-export async function scheduled(
-  event: ScheduledController, 
-  env: Bindings, 
-  ctx: ExecutionContext
-): Promise<void> {
-  console.log("Cron trigger started for updating zero price tokens");
-  CronService.initialize(env.DB);
-  await CronService.updateZeroPriceTokens();
-}
+/**
+ * Export both the fetch handler for HTTP requests and scheduled function for cron jobs
+ * The scheduled function runs two different cron jobs:
+ * 1. Updates SUI price every 5 minutes
+ * 2. Updates zero price tokens every 30 minutes
+ */
+export default {
+  fetch: app.fetch,
+  scheduled: async (
+    event: ScheduledController,
+    env: Bindings,
+    ctx: ExecutionContext
+  ): Promise<void> => {
+    CronService.initialize(env.DB);
+    
+    // SUI price update (every 5 minutes)
+    if (event.cron === "*/5 * * * *") {
+      console.log("Cron trigger started for updating SUI price");
+      await CronService.updateSuiPrice();
+    }
+    
+    // Zero price tokens update (every 30 minutes)
+    if (event.cron === "*/30 * * * *") {
+      console.log("Cron trigger started for updating zero price tokens");
+      await CronService.updateZeroPriceTokens();
+    }
+  }
+};
 
 // Initialize services with database
 app.use('*', async (c, next) => {
@@ -89,6 +127,30 @@ app.get("/wallet-tokens/:walletAddress", async (c) => {
 })
 // Get wallet tokens
 // Get token price endpoint
+// Get SUI price history
+app.get("/sui-price-history", async (c) => {
+  try {
+    const minutes = parseInt(c.req.query('minutes') || '60'); // Default to last 60 minutes
+    const db = new DatabaseService(c.env.DB);
+    const priceHistory = await db.getSuiPriceHistory(minutes);
+    
+    return c.json({
+      success: true,
+      data: {
+        history: priceHistory.map(entry => ({
+          price: entry.price_usd,
+          timestamp: entry.created_at
+        }))
+      }
+    });
+  } catch (error: any) {
+    return c.json({
+      success: false,
+      error: error?.message || "Failed to fetch SUI price history"
+    }, 500);
+  }
+});
+
 app.get("/price/:tokenType", async (c) => {
   const tokenType = c.req.param('tokenType');
   console.log(`[API] Price request received for token: ${tokenType}`);
@@ -193,13 +255,23 @@ app.get("/wallet/:address", async (c) => {
     
     console.log(`[API] Total coins fetched: ${allCoins.length}`);
     
-    // Group coins by coinType and get the latest version
+    // Group coins by coinType and aggregate balances
     const coinsByType = new Map();
     for (const coin of allCoins) {
       const existingCoin = coinsByType.get(coin.coinType);
-      // If coin doesn't exist or current coin version is newer, update the map
-      if (!existingCoin || BigInt(coin.version) > BigInt(existingCoin.version)) {
-        coinsByType.set(coin.coinType, coin);
+      if (!existingCoin) {
+        // İlk kez karşılaşılan coin tipi
+        coinsByType.set(coin.coinType, {
+          ...coin,
+          balance: BigInt(coin.balance).toString()
+        });
+      } else {
+        // Aynı tip coin'in balance'ını topla
+        const totalBalance = (BigInt(existingCoin.balance) + BigInt(coin.balance)).toString();
+        coinsByType.set(coin.coinType, {
+          ...coin,
+          balance: totalBalance
+        });
       }
     }
     
@@ -294,20 +366,25 @@ app.get("/wallet/:address", async (c) => {
     const totalValueUSD = tokenData.reduce((sum, token) => sum + token.valueUSD, 0);
     console.log(`[API] Total USD value for wallet ${address}: ${totalValueUSD}`);
 
-    // Save to DB
+    // Save to DB and get percentage change
     console.log(`[API] Saving wallet data to database for: ${address}`);
     await db.saveWallet({
       address,
       totalValueUSD,
       tokens: tokenData
     });
-    console.log(`[API] Successfully saved wallet data for: ${address}`);
+    
+    // Save to history and get percentage change
+    const tokensJson = JSON.stringify(tokenData);
+    const { percentageChange } = await db.saveWalletHistory(address, totalValueUSD, tokensJson);
+    console.log(`[API] Successfully saved wallet data and history for: ${address}`);
 
     return c.json({
       success: true,
       data: {
         address,
         totalValueUSD,
+        percentageChange,
         tokens: tokenData
       },
       fromCache: false

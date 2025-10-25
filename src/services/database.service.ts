@@ -33,6 +33,21 @@ export interface TokenData {
     };
 }
 
+export interface WalletHistoryEntry {
+    id: number;
+    wallet_address: string;
+    total_value_usd: number;
+    percentage_change: number | null;
+    tokens_json: string;
+    created_at: number;
+}
+
+export interface SuiPriceEntry {
+    id: number;
+    price_usd: number;
+    created_at: number;
+}
+
 export interface WalletTokenData {
     coinType: string;
     balance: string;
@@ -61,6 +76,130 @@ export class DatabaseService {
 
     constructor(database: D1Database) {
         this.db = database;
+    }
+
+    // Wallet history methods
+    async saveWalletHistory(
+        walletAddress: string,
+        totalValueUsd: number,
+        tokensJson: string
+    ): Promise<{ percentageChange: number | null }> {
+        try {
+            // Get the last history entry from today
+            const startOfDay = new Date();
+            startOfDay.setHours(0, 0, 0, 0);
+            
+            const lastEntry = await this.getLastWalletHistory(walletAddress, startOfDay.getTime());
+            
+            // Calculate percentage change if we have a previous entry
+            let percentageChange: number | null = null;
+            if (lastEntry) {
+                percentageChange = ((totalValueUsd - lastEntry.total_value_usd) / lastEntry.total_value_usd) * 100;
+            }
+            
+            // Save new entry
+            const stmt = await this.db.prepare(`
+                INSERT INTO wallet_history (
+                    wallet_address,
+                    total_value_usd,
+                    percentage_change,
+                    tokens_json,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?)
+            `);
+            
+            await stmt.bind(
+                walletAddress,
+                totalValueUsd,
+                percentageChange,
+                tokensJson,
+                Date.now()
+            ).run();
+            
+            return { percentageChange };
+            
+        } catch (error) {
+            console.error('Error saving wallet history:', error);
+            throw error;
+        }
+    }
+    
+    async getLastWalletHistory(
+        walletAddress: string,
+        since: number
+    ): Promise<WalletHistoryEntry | null> {
+        try {
+            const stmt = await this.db.prepare(`
+                SELECT *
+                FROM wallet_history
+                WHERE wallet_address = ?
+                AND created_at >= ?
+                ORDER BY created_at DESC
+                LIMIT 1
+            `);
+            
+            return await stmt.bind(walletAddress, since).first<WalletHistoryEntry>();
+            
+        } catch (error) {
+            console.error('Error getting last wallet history:', error);
+            throw error;
+        }
+    }
+    
+    async getWalletHistoryForPeriod(
+        walletAddress: string,
+        startTime: number,
+        endTime: number
+    ): Promise<WalletHistoryEntry[]> {
+        try {
+            const stmt = await this.db.prepare(`
+                SELECT *
+                FROM wallet_history
+                WHERE wallet_address = ?
+                AND created_at BETWEEN ? AND ?
+                ORDER BY created_at ASC
+            `);
+            
+            const result = await stmt.bind(walletAddress, startTime, endTime).all();
+            return (result.results as unknown) as WalletHistoryEntry[];
+            
+        } catch (error) {
+            console.error('Error getting wallet history:', error);
+            throw error;
+        }
+    }
+
+    // SUI Price methods
+    async saveSuiPrice(priceUsd: number): Promise<void> {
+        try {
+            const stmt = await this.db.prepare(`
+                INSERT INTO sui_price_history (price_usd, created_at)
+                VALUES (?, ?)
+            `);
+            
+            await stmt.bind(priceUsd, Date.now()).run();
+        } catch (error) {
+            console.error('Error saving SUI price:', error);
+            throw error;
+        }
+    }
+
+    async getSuiPriceHistory(minutes: number): Promise<SuiPriceEntry[]> {
+        try {
+            const startTime = Date.now() - (minutes * 60 * 1000);
+            const stmt = await this.db.prepare(`
+                SELECT *
+                FROM sui_price_history
+                WHERE created_at >= ?
+                ORDER BY created_at ASC
+            `);
+            
+            const result = await stmt.bind(startTime).all();
+            return (result.results as unknown) as SuiPriceEntry[];
+        } catch (error) {
+            console.error('Error getting SUI price history:', error);
+            throw error;
+        }
     }
 
     async query<T>(sql: string, params: any[] = []): Promise<T[]> {

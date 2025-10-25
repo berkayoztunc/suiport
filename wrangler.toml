@@ -2,6 +2,12 @@ name = "suiport"
 main = "src/index.ts"
 compatibility_date = "2023-01-01"
 
+[triggers]
+crons = [
+    "*/5 * * * *",   # SUI fiyat güncellemesi (her 5 dakikada bir)
+    "*/30 * * * *"   # Token fiyat güncellemesi (her 30 dakikada bir)
+]
+
 [[d1_databases]]
 binding = "DB"
 database_name = "suiport-db"

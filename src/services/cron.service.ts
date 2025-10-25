@@ -1,4 +1,4 @@
-import { getTokenPrice } from "@7kprotocol/sdk-ts";
+import { getTokenPrice, getSuiPrice } from "@7kprotocol/sdk-ts";
 import { DatabaseService } from './database.service';
 
 export class CronService {
@@ -6,6 +6,24 @@ export class CronService {
 
     static initialize(database: D1Database) {
         this.dbService = new DatabaseService(database);
+    }
+
+    static async updateSuiPrice(): Promise<void> {
+        try {
+            console.log('[CronService] Starting SUI price update job');
+            const suiPrice = await getSuiPrice();
+            
+            if (suiPrice !== null && !isNaN(suiPrice) && isFinite(suiPrice) && suiPrice > 0) {
+                console.log(`[CronService] Got SUI price: ${suiPrice}`);
+                await this.dbService.saveSuiPrice(suiPrice);
+                console.log('[CronService] Successfully saved SUI price');
+            } else {
+                console.log('[CronService] Invalid SUI price received:', suiPrice);
+            }
+        } catch (error) {
+            console.error('[CronService] Error updating SUI price:', error);
+            throw error;
+        }
     }
 
     static async updateZeroPriceTokens(): Promise<void> {

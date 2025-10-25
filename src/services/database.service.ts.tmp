@@ -1,0 +1,89 @@
+  // Wallet history methods
+  async saveWalletHistory(
+    walletAddress: string,
+    totalValueUsd: number,
+    tokensJson: string
+  ): Promise<{ percentageChange: number | null }> {
+    try {
+      // Get the last history entry from today
+      const startOfDay = new Date();
+      startOfDay.setHours(0, 0, 0, 0);
+      
+      const lastEntry = await this.getLastWalletHistory(walletAddress, startOfDay.getTime());
+      
+      // Calculate percentage change if we have a previous entry
+      let percentageChange: number | null = null;
+      if (lastEntry) {
+        percentageChange = ((totalValueUsd - lastEntry.total_value_usd) / lastEntry.total_value_usd) * 100;
+      }
+      
+      // Save new entry
+      const stmt = await this.db.prepare(`
+        INSERT INTO wallet_history (
+          wallet_address,
+          total_value_usd,
+          percentage_change,
+          tokens_json,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?)
+      `);
+      
+      await stmt.bind(
+        walletAddress,
+        totalValueUsd,
+        percentageChange,
+        tokensJson,
+        Date.now()
+      ).run();
+      
+      return { percentageChange };
+      
+    } catch (error) {
+      console.error('Error saving wallet history:', error);
+      throw error;
+    }
+  }
+  
+  async getLastWalletHistory(
+    walletAddress: string,
+    since: number
+  ): Promise<WalletHistoryEntry | null> {
+    try {
+      const stmt = await this.db.prepare(`
+        SELECT *
+        FROM wallet_history
+        WHERE wallet_address = ?
+        AND created_at >= ?
+        ORDER BY created_at DESC
+        LIMIT 1
+      `);
+      
+      return await stmt.bind(walletAddress, since).first<WalletHistoryEntry>();
+      
+    } catch (error) {
+      console.error('Error getting last wallet history:', error);
+      throw error;
+    }
+  }
+  
+  async getWalletHistoryForPeriod(
+    walletAddress: string,
+    startTime: number,
+    endTime: number
+  ): Promise<WalletHistoryEntry[]> {
+    try {
+      const stmt = await this.db.prepare(`
+        SELECT *
+        FROM wallet_history
+        WHERE wallet_address = ?
+        AND created_at BETWEEN ? AND ?
+        ORDER BY created_at ASC
+      `);
+      
+      return await stmt.bind(walletAddress, startTime, endTime).all().then(result => result.results as WalletHistoryEntry[]);
+      
+    } catch (error) {
+      console.error('Error getting wallet history:', error);
+      throw error;
+    }
+  }

@@ -15,7 +15,10 @@
 		"enabled": true
 	},
 	"triggers": {
-		"crons": ["* * * * *"]  // Her dakika çalışacak
+		"crons": [
+			"*/5 * * * *",   // SUI fiyat güncellemesi (her 5 dakikada bir)
+			"*/30 * * * *"   // Token fiyat güncellemesi (her 30 dakikada bir)
+		]
 	},
 	"d1_databases": [
 		{
