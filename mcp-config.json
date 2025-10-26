@@ -1,0 +1,22 @@
+{
+  "mcpServers": {
+    "suiport": {
+      "url": "https://your-worker-url.workers.dev/mcp",
+      "description": "SuiPort MCP Server - Query SUI wallet balances and token prices",
+      "transport": {
+        "type": "http",
+        "method": "POST"
+      },
+      "tools": [
+        {
+          "name": "get_wallet_balance",
+          "description": "Get the balance and token holdings of a SUI wallet address"
+        },
+        {
+          "name": "get_token_price",
+          "description": "Get the current USD price of a token on the SUI blockchain"
+        }
+      ]
+    }
+  }
+}

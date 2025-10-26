@@ -6,6 +6,12 @@ export interface TokenDB {
     metadata?: string;
 }
 
+export interface TokenPrice {
+    name: string;
+    price: number;
+    timestamp: number;
+}
+
 export interface WalletDB {
     address: string;
     total_value_usd: number;
@@ -78,7 +84,66 @@ export class DatabaseService {
         this.db = database;
     }
 
+    /**
+     * Saves SUI price to price history table
+     */
+    async saveSuiPriceHistory(priceUSD: number): Promise<void> {
+        try {
+            const stmt = this.db.prepare(`
+                INSERT INTO sui_price_history (price_usd, created_at)
+                VALUES (?, ?)
+            `);
+            
+            await stmt.bind(priceUSD, Date.now()).run();
+            console.log(`[Database] Saved SUI price history: ${priceUSD}`);
+        } catch (error) {
+            console.error('[Database] Error saving SUI price history:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Get cached token price from database
+     * @param tokenName The name/symbol of the token
+     * @returns Token price information or null if not found
+     */
+    async getTokenPrice(tokenName: string): Promise<TokenPrice | null> {
+        try {
+            const stmt = this.db.prepare(`
+                SELECT coin_type as name, price_usd as price, last_update as timestamp
+                FROM tokens
+                WHERE coin_type = ?
+            `);
+            const result = await stmt.bind(tokenName).first<TokenPrice>();
+            return result || null;
+        } catch (error) {
+            console.error('[Database] Error fetching token price:', error);
+            return null;
+        }
+    }
+
+    /**
+     * Update token price and last update timestamp in database
+     * @param token Token price information to update
+     */
+    async saveTokenPrice(token: TokenPrice): Promise<void> {
+        try {
+            const stmt = this.db.prepare(`
+                INSERT OR REPLACE INTO tokens (coin_type, price_usd, last_update)
+                VALUES (?, ?, ?)
+            `);
+            await stmt.bind(token.name, token.price, token.timestamp).run();
+            console.log(`[Database] Updated price for token ${token.name}: ${token.price}`);
+        } catch (error) {
+            console.error('[Database] Error updating token price:', error);
+            throw error;
+        }
+    }
+
     // Wallet history methods
+    /**
+     * Updates token price in the database if the new price is not zero
+     */
     async saveWalletHistory(
         walletAddress: string,
         totalValueUsd: number,
@@ -165,6 +230,46 @@ export class DatabaseService {
             
         } catch (error) {
             console.error('Error getting wallet history:', error);
+            throw error;
+        }
+    }
+
+    async getWalletHistoryRange(
+        walletAddress: string,
+        since: number
+    ): Promise<WalletHistoryEntry[]> {
+        try {
+            const stmt = await this.db.prepare(`
+                SELECT *
+                FROM wallet_history
+                WHERE wallet_address = ?
+                AND created_at >= ?
+                ORDER BY created_at ASC
+            `);
+            
+            const result = await stmt.bind(walletAddress, since).all();
+            return (result.results as unknown) as WalletHistoryEntry[];
+            
+        } catch (error) {
+            console.error('Error getting wallet history range:', error);
+            throw error;
+        }
+    }
+
+    async getAllTokens(limit: number = 100, offset: number = 0): Promise<TokenDB[]> {
+        try {
+            const stmt = await this.db.prepare(`
+                SELECT *
+                FROM tokens
+                ORDER BY last_update DESC
+                LIMIT ? OFFSET ?
+            `);
+            
+            const result = await stmt.bind(limit, offset).all();
+            return (result.results as unknown) as TokenDB[];
+            
+        } catch (error) {
+            console.error('Error getting all tokens:', error);
             throw error;
         }
     }
@@ -302,6 +407,19 @@ export class DatabaseService {
         if (!wallet) return true;
         return (Date.now() - wallet.last_update) > HOUR_IN_MS;
     }
+
+    async getAirdropTokenList(limit: number): Promise<any[]> {
+        console.log(`[DB] Fetching airdrop token list with limit: ${limit}`);
+        const stmt = await this.db.prepare('SELECT coin_type,price_usd,metadata FROM tokens WHERE price_usd between 0.1 and 1 LIMIT ?');
+        const result = await stmt.bind(limit).all<{ coin_type: string, price_usd: number, metadata: string }>();
+        const tokenList = result.results.map(t => ({
+            coinType: t.coin_type,
+            priceUSD: t.price_usd,
+            metadata: t.metadata ? JSON.parse(t.metadata) : undefined
+        }));
+        console.log(`[DB] Retrieved ${tokenList.length} airdrop tokens`);
+        return tokenList;
+    }   
 
     async saveWallet(wallet: WalletData): Promise<void> {
         console.log(`[DB] Starting to save wallet: ${wallet.address}`);

@@ -10,7 +10,14 @@ import { SuiClient, getFullnodeUrl } from '@mysten/sui/client';
 import { PriceService } from './services/price.service';
 import { DatabaseService } from './services/database.service';
 import { CronService } from './services/cron.service';
+import { mmtService2 } from "./services/mmt2.service";
 import { getTokenPrice, getTokenPrices, getSuiPrice } from "@7kprotocol/sdk-ts";
+import { cetusService } from "./services/cetus.service";
+import { deepbookMarketMaker } from "./services/deepbook.service";
+import { createGraphQLServer } from './graphql/server';
+import { GraphQLContext } from './graphql/context';
+import { MmtSDK } from '@mmt-finance/clmm-sdk';
+import { createMCPServer } from './mcp/server';
 
 /**
  * Interface for Cloudflare D1 database bindings
@@ -71,6 +78,52 @@ app.use('*', async (c, next) => {
   await next();
 });
 
+// SUI Mainnet client
+const client = new SuiClient({ url: getFullnodeUrl('mainnet') });
+
+// Create GraphQL server
+const graphqlServer = createGraphQLServer();
+
+// GraphQL endpoint
+app.all('/graphql', async (c) => {
+  const db = new DatabaseService(c.env.DB);
+  
+  // Create GraphQL context
+  const graphqlContext: GraphQLContext = {
+    db,
+    database: c.env.DB,
+    suiClient: client,
+    priceService: PriceService,
+    cronService: CronService,
+  };
+
+  // Handle GraphQL request
+  const response = await graphqlServer.handle(c.req.raw, graphqlContext);
+  return response;
+});
+
+// MCP (Model Context Protocol) endpoint
+app.post('/mcp', async (c) => {
+  try {
+    // Initialize services
+    PriceService.initialize(c.env.DB);
+    
+    // Create MCP server
+    const mcpServer = createMCPServer(c.env.DB, client);
+    
+    // Handle MCP request
+    const response = await mcpServer.handleRequest(c.req.raw);
+    
+    return response;
+  } catch (error: any) {
+    console.error('[MCP] Error handling MCP request:', error);
+    return c.json({
+      success: false,
+      error: error?.message || 'Failed to process MCP request'
+    }, 500);
+  }
+});
+
 // Cron trigger for updating zero price tokens (runs every minute)
 app.get('/scheduled-tasks/update-zero-prices', async (c) => {
   try {
@@ -81,9 +134,6 @@ app.get('/scheduled-tasks/update-zero-prices', async (c) => {
     return c.json({ success: false, message: 'Failed to update zero price tokens' }, 500);
   }
 });
-
-// SUI Mainnet client
-const client = new SuiClient({ url: getFullnodeUrl('mainnet') });
 
 // Types for wallet data
 interface TokenData {
@@ -125,6 +175,46 @@ app.get("/wallet-tokens/:walletAddress", async (c) => {
     });
   return c.json({ message: "API is working!", coins });
 })
+
+/**
+ * Updates SUI price in the database and tokens table
+ */
+app.get("/update-sui-price", async (c) => {
+  try {
+    // Get latest SUI price
+    const suiPrice = await getSuiPrice();
+    
+    if (!suiPrice || suiPrice === 0) {
+      return c.json({
+        success: false,
+        message: "Could not fetch SUI price"
+      }, 500);
+    }
+
+    const db = new DatabaseService(c.env.DB);
+    
+    // Update SUI price in tokens table
+    await db.updateTokenPrice("0x2::sui::SUI", suiPrice);
+    
+    // Save price history
+    await db.saveSuiPriceHistory(suiPrice);
+
+    return c.json({
+      success: true,
+      data: {
+        price: suiPrice,
+        timestamp: new Date().toISOString()
+      }
+    });
+  } catch (error: any) {
+    console.error("Error updating SUI price:", error);
+    return c.json({
+      success: false,
+      error: error?.message || "Failed to update SUI price"
+    }, 500);
+  }
+})
+
 // Get wallet tokens
 // Get token price endpoint
 // Get SUI price history
@@ -396,6 +486,159 @@ app.get("/wallet/:address", async (c) => {
       error: error?.message || 'Unknown error occurred'
     }, 500);
   }
+});
+
+// Get MMT Finance positions for a wallet
+
+
+app.get('/api/wallet/:address/mmt-positions', async (c) => {
+  
+  try {
+    const address = c.req.param('address');
+    
+    // Validate address
+    if (!address) {
+      return c.json({
+        success: false,
+        error: 'Wallet address is required'
+      }, 400);
+    }
+
+    // Get positions from MMT Finance
+    const positions = await mmtService2.getUserPositions(address);
+    
+    return c.json({
+      success: true,
+      data: {
+        address,
+        positions
+      }
+    });
+
+  } catch (error: any) {
+    return c.json({
+      success: false,
+      error: error?.message || 'Failed to fetch MMT Finance positions'
+    }, 500);
+  }
+});
+
+
+// Get cetus Finance positions for a wallet
+app.get('/api/wallet/:address/cetus-positions', async (c) => {
+  try {
+    const address = c.req.param('address');
+    
+    // Validate address
+    if (!address) {
+      return c.json({
+        success: false,
+        error: 'Wallet address is required'
+      }, 400);
+    }
+
+    // Get positions from Cetus Finance
+    const positions = await cetusService.getUserPositions(address);
+    
+    return c.json({
+      success: true,
+      data: {
+        address,
+        positions
+      }
+    });
+
+  } catch (error: any) {  
+    return c.json({
+      success: false,
+      error: error?.message || 'Failed to fetch Cetus Finance positions'
+    }, 500);
+  }
+});
+
+
+// Get DeepBook balances for a wallet
+app.get('/api/wallet/:address/deepbook-balances', async (c) => {
+  try {
+    const address = c.req.param('address');
+    
+    // Validate address
+    if (!address) {
+      return c.json({
+        success: false,
+        error: 'Wallet address is required'
+      }, 400);
+    }
+
+    // Get balances from DeepBook
+    const balances = await deepbookMarketMaker.getDeepbookBalances(address);
+    
+    return c.json({
+      success: true,
+      data: {
+        address,
+        balances
+      }
+    });
+
+  } catch (error: any) {  
+    return c.json({
+      success: false,
+      error: error?.message || 'Failed to fetch DeepBook balances'
+    }, 500);
+  }
+});
+
+app.get('/mmt-tokens', async (c) => {
+    const sdk = MmtSDK.NEW({
+      network: 'mainnet',
+    });
+   const tokens = await sdk.Pool.getAllTokens();
+
+   // update or insert tokens to database
+    const db = new DatabaseService(c.env.DB);
+    for (const token of tokens) {
+      await db.saveToken({
+        coin_type: token.coinType,
+        price_usd: parseFloat(token.price),
+        last_update: Date.now(),
+        metadata: JSON.stringify({
+          decimals: token.decimals,
+          name: token.name,
+          symbol: token.ticker,
+        })
+      });
+    }
+   return c.json({ tokens });
+});
+
+
+// mock airdrop list response
+app.get('/api/airdrop-list', async (c) => {
+  
+  // get 3 token from database whitch price is lowr than 1 dollar with query
+
+  const db = new DatabaseService(c.env.DB);
+  const airdropList = await db.getAirdropTokenList(3);
+
+  // şimdi bu 3 tokena map ile elligable amount ve status ekleyeceğiz
+  const detailedAirdropList = airdropList.map(token => {
+
+    const randomEligibility = Math.random() < 0.5; // %50 şansla eligible yap
+
+    // next 12 day
+    const randomdate = new Date();
+    randomdate.setDate(randomdate.getDate() + Math.floor(Math.random() * 12) + 1);
+    return {
+      token,
+      
+      eligibleAmount: Math.floor(Math.random() * 1000), // random eligible amount
+      status: randomEligibility ? 'eligible' : 'ineligible',
+      expirationDate: randomdate.toISOString()
+    };
+  });
+
+  return c.json({ success: true, data: detailedAirdropList });
 });
 
 // Export worker
